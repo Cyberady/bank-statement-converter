@@ -606,11 +606,20 @@
         "documentation": {}
     },
     {
-        "label": "apply_balance_logic",
+        "label": "apply_transaction_logic",
         "kind": 2,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "def apply_balance_logic(txns):\n    prev_balance = None\n    for t in txns:\n        desc = t[\"description\"].upper()\n        bal = t[\"balance\"]\n        if \" CR\" in desc or \"/CR/\" in desc:\n            t[\"type\"] = \"credit\"\n        elif \" DR\" in desc or \"/DR/\" in desc:\n            t[\"type\"] = \"debit\"\n        elif prev_balance is not None and bal is not None:",
+        "peekOfCode": "def apply_transaction_logic(txns):\n    prev_balance = None\n    for t in txns:\n        desc = t[\"description\"].upper()\n        bal = t[\"balance\"]\n        # Priority 1: CR / DR text\n        if \" CR\" in desc or \"/CR/\" in desc:\n            t[\"type\"] = \"credit\"\n        elif \" DR\" in desc or \"/DR/\" in desc:\n            t[\"type\"] = \"debit\"",
+        "detail": "main",
+        "documentation": {}
+    },
+    {
+        "label": "build_ca_dataframe",
+        "kind": 2,
+        "importPath": "main",
+        "description": "main",
+        "peekOfCode": "def build_ca_dataframe(txns):\n    rows = []\n    for t in txns:\n        debit = t[\"raw_amount\"] if t[\"type\"] == \"debit\" else \"\"\n        credit = t[\"raw_amount\"] if t[\"type\"] == \"credit\" else \"\"\n        rows.append({\n            \"Date\": t[\"date\"],\n            \"Particulars\": t[\"description\"],\n            \"Debit\": debit,\n            \"Credit\": credit,",
         "detail": "main",
         "documentation": {}
     },
@@ -619,7 +628,7 @@
         "kind": 2,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "def csv(name: str):\n    return FileResponse(os.path.join(EXPORT_DIR, name + \".csv\"))\n@app.get(\"/download/excel/{name}\")\ndef excel(name: str):\n    return FileResponse(os.path.join(EXPORT_DIR, name + \".xlsx\"))",
+        "peekOfCode": "def csv(name: str):\n    path = os.path.join(EXPORT_DIR, name + \".csv\")\n    if not os.path.exists(path):\n        raise HTTPException(404, \"File not found\")\n    return FileResponse(path, filename=name + \".csv\")\n@app.get(\"/download/excel/{name}\")\ndef excel(name: str):\n    path = os.path.join(EXPORT_DIR, name + \".xlsx\")\n    if not os.path.exists(path):\n        raise HTTPException(404, \"File not found\")",
         "detail": "main",
         "documentation": {}
     },
@@ -628,7 +637,7 @@
         "kind": 2,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "def excel(name: str):\n    return FileResponse(os.path.join(EXPORT_DIR, name + \".xlsx\"))",
+        "peekOfCode": "def excel(name: str):\n    path = os.path.join(EXPORT_DIR, name + \".xlsx\")\n    if not os.path.exists(path):\n        raise HTTPException(404, \"File not found\")\n    return FileResponse(path, filename=name + \".xlsx\")",
         "detail": "main",
         "documentation": {}
     },
@@ -637,7 +646,7 @@
         "kind": 5,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "app = FastAPI(title=\"BankConv API – V3\")\n# -------------------- CORS (VERY IMPORTANT) --------------------\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=[\"*\"],  # for now (later restrict)\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n# -------------------- DIRECTORIES --------------------",
+        "peekOfCode": "app = FastAPI(title=\"BankConv API – CA Format V4\")\n# -------------------- CORS --------------------\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=[\"*\"],  # later restrict\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n# -------------------- DIRECTORIES --------------------",
         "detail": "main",
         "documentation": {}
     },
@@ -646,7 +655,7 @@
         "kind": 5,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "UPLOAD_DIR = \"uploads\"\nEXPORT_DIR = \"exports\"\nos.makedirs(UPLOAD_DIR, exist_ok=True)\nos.makedirs(EXPORT_DIR, exist_ok=True)\n# -------------------- REGEX --------------------\nDATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE LOGIC --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")",
+        "peekOfCode": "UPLOAD_DIR = \"uploads\"\nEXPORT_DIR = \"exports\"\nos.makedirs(UPLOAD_DIR, exist_ok=True)\nos.makedirs(EXPORT_DIR, exist_ok=True)\n# -------------------- REGEX --------------------\nDATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE EXTRACTION --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")",
         "detail": "main",
         "documentation": {}
     },
@@ -655,7 +664,7 @@
         "kind": 5,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "EXPORT_DIR = \"exports\"\nos.makedirs(UPLOAD_DIR, exist_ok=True)\nos.makedirs(EXPORT_DIR, exist_ok=True)\n# -------------------- REGEX --------------------\nDATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE LOGIC --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []",
+        "peekOfCode": "EXPORT_DIR = \"exports\"\nos.makedirs(UPLOAD_DIR, exist_ok=True)\nos.makedirs(EXPORT_DIR, exist_ok=True)\n# -------------------- REGEX --------------------\nDATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE EXTRACTION --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []",
         "detail": "main",
         "documentation": {}
     },
@@ -664,7 +673,7 @@
         "kind": 5,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "DATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE LOGIC --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []\n    for line in lines:\n        date_match = DATE_PATTERN.search(line)\n        if not date_match:\n            continue",
+        "peekOfCode": "DATE_PATTERN = re.compile(r\"\\d{2}-\\d{2}-\\d{4}\")\nAMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE EXTRACTION --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []\n    for line in lines:\n        date_match = DATE_PATTERN.search(line)\n        if not date_match:\n            continue",
         "detail": "main",
         "documentation": {}
     },
@@ -673,7 +682,7 @@
         "kind": 5,
         "importPath": "main",
         "description": "main",
-        "peekOfCode": "AMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE LOGIC --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []\n    for line in lines:\n        date_match = DATE_PATTERN.search(line)\n        if not date_match:\n            continue\n        amounts = AMOUNT_PATTERN.findall(line)",
+        "peekOfCode": "AMOUNT_PATTERN = re.compile(r\"([\\d,]+\\.\\d{2})\")\n# -------------------- CORE EXTRACTION --------------------\ndef extract_transactions(text: str):\n    lines = text.split(\"\\n\")\n    txns = []\n    for line in lines:\n        date_match = DATE_PATTERN.search(line)\n        if not date_match:\n            continue\n        amounts = AMOUNT_PATTERN.findall(line)",
         "detail": "main",
         "documentation": {}
     }
