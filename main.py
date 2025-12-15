@@ -7,7 +7,9 @@ import re
 import pandas as pd
 from uuid import uuid4
 
-app = FastAPI(title="Bank Statement Converter API")
+app = FastAPI(title="Bank Statement Converter API – V3")
+
+# -------------------- DIRECTORIES --------------------
 
 UPLOAD_DIR = "uploads"
 EXPORT_DIR = "exports"
@@ -15,9 +17,10 @@ EXPORT_DIR = "exports"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
+# -------------------- REGEX PATTERNS --------------------
+
 DATE_PATTERN = re.compile(r"\d{2}-\d{2}-\d{4}")
 AMOUNT_PATTERN = re.compile(r"([\d,]+\.\d{2})")
-
 
 # -------------------- CORE EXTRACTION --------------------
 
@@ -36,7 +39,7 @@ def extract_transactions(text: str):
 
         date = date_match.group()
 
-        # Default assumption
+        # Default
         amount = amounts[-1].replace(",", "")
         balance = None
 
@@ -59,8 +62,7 @@ def extract_transactions(text: str):
 
     return transactions
 
-
-# -------------------- TYPE DETECTION LOGIC --------------------
+# -------------------- TRANSACTION TYPE LOGIC (V3) --------------------
 
 def apply_transaction_logic(transactions):
     prev_balance = None
@@ -69,23 +71,24 @@ def apply_transaction_logic(transactions):
         desc = txn["description"].upper()
         curr_balance = txn["balance"]
 
-        # 1️⃣ Explicit CR / DR has highest priority
-        if " CR" in desc or "/CR/" in desc:
+        # 1️⃣ Explicit CR / DR → highest priority
+        if " CR" in desc or "/CR/" in desc or desc.endswith(" CR"):
             txn["type"] = "credit"
-        elif " DR" in desc or "/DR/" in desc:
+
+        elif " DR" in desc or "/DR/" in desc or desc.endswith(" DR"):
             txn["type"] = "debit"
 
-        # 2️⃣ Balance comparison (fallback)
+        # 2️⃣ Balance difference fallback
         elif prev_balance is not None and curr_balance is not None:
             if curr_balance > prev_balance:
                 txn["type"] = "credit"
             elif curr_balance < prev_balance:
                 txn["type"] = "debit"
 
-        prev_balance = curr_balance
+        # 3️⃣ Otherwise remains unknown
+        prev_balance = curr_balance if curr_balance is not None else prev_balance
 
     return transactions
-
 
 # -------------------- API ENDPOINT --------------------
 
@@ -100,11 +103,11 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     pdf_path = os.path.join(UPLOAD_DIR, f"{safe_name}.pdf")
 
-    # Save file
+    # Save PDF
     with open(pdf_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # Extract text
+    # Read PDF text
     text = ""
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
@@ -113,7 +116,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not text.strip():
         raise HTTPException(status_code=400, detail="Unable to read PDF text")
 
-    # Process transactions
+    # Extract & process
     transactions = extract_transactions(text)
     transactions = apply_transaction_logic(transactions)
 
@@ -123,23 +126,23 @@ async def upload_pdf(file: UploadFile = File(...)):
     # DataFrame
     df = pd.DataFrame(transactions)
 
-    # Sort for safety
+    # Sort by date (safe)
     df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y", errors="coerce")
     df = df.sort_values("date").reset_index(drop=True)
 
-    # Export paths
+    # Export files
     csv_path = os.path.join(EXPORT_DIR, f"{safe_name}.csv")
     excel_path = os.path.join(EXPORT_DIR, f"{safe_name}.xlsx")
 
     df.to_csv(csv_path, index=False)
     df.to_excel(excel_path, index=False)
 
-    # Summary (safe)
+    # Summary (safe & accurate)
     total_credit = df[df["type"] == "credit"]["amount"].sum()
     total_debit = df[df["type"] == "debit"]["amount"].sum()
 
-    opening_balance = df.iloc[0]["balance"]
-    closing_balance = df.iloc[-1]["balance"]
+    opening_balance = df["balance"].dropna().iloc[0] if not df["balance"].dropna().empty else None
+    closing_balance = df["balance"].dropna().iloc[-1] if not df["balance"].dropna().empty else None
 
     return {
         "message": "Statement processed successfully ✅",
@@ -153,7 +156,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         "download_csv": f"/download/csv/{safe_name}",
         "download_excel": f"/download/excel/{safe_name}"
     }
-
 
 # -------------------- DOWNLOAD ENDPOINTS --------------------
 
