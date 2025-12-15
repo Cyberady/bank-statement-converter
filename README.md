@@ -36,3 +36,20 @@ Upload a bank statement PDF and receive:
   "opening_balance": 40149.89,
   "closing_balance": 802.11
 }
+🧠 Notes
+Uses rule-based parsing (no external APIs)
+
+Balance-delta logic ensures accurate debit/credit detection
+
+Designed for extensibility across multiple banks
+
+📌 Future Enhancements
+Multi-bank format detection
+
+OCR fallback for scanned PDFs
+
+Frontend UI
+
+Authentication & rate limiting
+
+Built with ❤️ by Aditya
