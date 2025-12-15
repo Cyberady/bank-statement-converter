@@ -1,49 +1,36 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-import os
-import shutil
+import os, shutil, re
 import pdfplumber
-import re
 import pandas as pd
 from uuid import uuid4
 
-# -------------------- APP --------------------
+app = FastAPI(title="BankConv API – V3")
 
-app = FastAPI(
-    title="BankConv API",
-    version="3.5",
-    description="Convert bank statements to CSV & Excel"
-)
-
-# -------------------- CORS (CRITICAL FOR UI) --------------------
-
+# -------------------- CORS (VERY IMPORTANT) --------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # later restrict to your domain
+    allow_origins=["*"],  # for now (later restrict)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # -------------------- DIRECTORIES --------------------
-
 UPLOAD_DIR = "uploads"
 EXPORT_DIR = "exports"
-
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 # -------------------- REGEX --------------------
-
 DATE_PATTERN = re.compile(r"\d{2}-\d{2}-\d{4}")
 AMOUNT_PATTERN = re.compile(r"([\d,]+\.\d{2})")
 
-# -------------------- CORE EXTRACTION --------------------
-
+# -------------------- CORE LOGIC --------------------
 def extract_transactions(text: str):
     lines = text.split("\n")
-    transactions = []
+    txns = []
 
     for line in lines:
         date_match = DATE_PATTERN.search(line)
@@ -55,7 +42,6 @@ def extract_transactions(text: str):
             continue
 
         date = date_match.group()
-
         amount = amounts[-1].replace(",", "")
         balance = None
 
@@ -64,11 +50,11 @@ def extract_transactions(text: str):
             amount = amounts[-2].replace(",", "")
 
         description = line.replace(date, "")
-        for amt in amounts:
-            description = description.replace(amt, "")
+        for a in amounts:
+            description = description.replace(a, "")
         description = description.strip()
 
-        transactions.append({
+        txns.append({
             "date": date,
             "description": description,
             "amount": float(amount),
@@ -76,119 +62,70 @@ def extract_transactions(text: str):
             "type": "unknown"
         })
 
-    return transactions
+    return txns
 
-# -------------------- TRANSACTION LOGIC (V3.5) --------------------
 
-def apply_transaction_logic(transactions):
+def apply_balance_logic(txns):
     prev_balance = None
 
-    for txn in transactions:
-        desc = txn["description"].upper()
-        curr_balance = txn["balance"]
+    for t in txns:
+        desc = t["description"].upper()
+        bal = t["balance"]
 
-        # 1️⃣ Explicit CR / DR
-        if " CR" in desc or "/CR/" in desc or desc.endswith("CR"):
-            txn["type"] = "credit"
-        elif " DR" in desc or "/DR/" in desc or desc.endswith("DR"):
-            txn["type"] = "debit"
+        if " CR" in desc or "/CR/" in desc:
+            t["type"] = "credit"
+        elif " DR" in desc or "/DR/" in desc:
+            t["type"] = "debit"
+        elif prev_balance is not None and bal is not None:
+            t["type"] = "credit" if bal > prev_balance else "debit"
 
-        # 2️⃣ Balance fallback
-        elif prev_balance is not None and curr_balance is not None:
-            if curr_balance > prev_balance:
-                txn["type"] = "credit"
-            elif curr_balance < prev_balance:
-                txn["type"] = "debit"
+        prev_balance = bal if bal is not None else prev_balance
 
-        prev_balance = curr_balance if curr_balance is not None else prev_balance
+    return txns
 
-    return transactions
-
-# -------------------- HEALTH CHECK --------------------
-
-@app.get("/")
-def health():
-    return {"status": "BankConv API is running 🚀"}
-
-# -------------------- UPLOAD ENDPOINT --------------------
-
+# -------------------- API --------------------
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files allowed")
+        raise HTTPException(400, "Only PDF allowed")
 
-    if file.size and file.size > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Max file size is 5MB")
+    uid = uuid4().hex
+    base = os.path.splitext(file.filename)[0]
+    safe = f"{base}_{uid}"
 
-    file_id = uuid4().hex
-    base_name = os.path.splitext(file.filename)[0]
-    safe_name = f"{base_name}_{file_id}"
-
-    pdf_path = os.path.join(UPLOAD_DIR, f"{safe_name}.pdf")
-
-    with open(pdf_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    pdf_path = os.path.join(UPLOAD_DIR, safe + ".pdf")
+    with open(pdf_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
     text = ""
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-    except Exception:
-        raise HTTPException(status_code=400, detail="Failed to read PDF")
+    with pdfplumber.open(pdf_path) as pdf:
+        for p in pdf.pages:
+            text += p.extract_text() or ""
 
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="Empty or scanned PDF")
+    txns = apply_balance_logic(extract_transactions(text))
+    if not txns:
+        raise HTTPException(400, "No transactions found")
 
-    transactions = extract_transactions(text)
-    transactions = apply_transaction_logic(transactions)
+    df = pd.DataFrame(txns)
+    df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+    df = df.sort_values("date")
 
-    if not transactions:
-        raise HTTPException(status_code=400, detail="No transactions found")
+    csv = os.path.join(EXPORT_DIR, safe + ".csv")
+    xlsx = os.path.join(EXPORT_DIR, safe + ".xlsx")
+    df.to_csv(csv, index=False)
+    df.to_excel(xlsx, index=False)
 
-    df = pd.DataFrame(transactions)
-
-    df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y", errors="coerce")
-    df = df.sort_values("date").reset_index(drop=True)
-
-    csv_path = os.path.join(EXPORT_DIR, f"{safe_name}.csv")
-    excel_path = os.path.join(EXPORT_DIR, f"{safe_name}.xlsx")
-
-    df.to_csv(csv_path, index=False)
-    df.to_excel(excel_path, index=False)
-
-    total_credit = df[df["type"] == "credit"]["amount"].sum()
-    total_debit = df[df["type"] == "debit"]["amount"].sum()
-
-    balances = df["balance"].dropna()
-    opening_balance = balances.iloc[0] if not balances.empty else None
-    closing_balance = balances.iloc[-1] if not balances.empty else None
-
-    return JSONResponse({
-        "message": "Statement processed successfully ✅",
-        "summary": {
-            "total_transactions": len(df),
-            "total_credit": round(float(total_credit), 2),
-            "total_debit": round(float(total_debit), 2),
-            "opening_balance": opening_balance,
-            "closing_balance": closing_balance
-        },
-        "download_csv": f"/download/csv/{safe_name}",
-        "download_excel": f"/download/excel/{safe_name}"
-    })
-
-# -------------------- DOWNLOADS --------------------
+    return {
+        "message": "Converted successfully 🚀",
+        "total_transactions": len(df),
+        "download_csv": f"/download/csv/{safe}",
+        "download_excel": f"/download/excel/{safe}"
+    }
 
 @app.get("/download/csv/{name}")
-def download_csv(name: str):
-    path = os.path.join(EXPORT_DIR, f"{name}.csv")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=f"{name}.csv")
+def csv(name: str):
+    return FileResponse(os.path.join(EXPORT_DIR, name + ".csv"))
 
 @app.get("/download/excel/{name}")
-def download_excel(name: str):
-    path = os.path.join(EXPORT_DIR, f"{name}.xlsx")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=f"{name}.xlsx")
+def excel(name: str):
+    return FileResponse(os.path.join(EXPORT_DIR, name + ".xlsx"))
