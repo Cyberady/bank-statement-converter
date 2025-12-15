@@ -22,8 +22,6 @@ def extract_transactions(text: str):
     date_pattern = re.compile(r"\d{2}-\d{2}-\d{4}")
     amount_pattern = re.compile(r"([\d,]+\.\d{2})")
 
-    prev_balance = None
-
     for line in lines:
         date_match = date_pattern.search(line)
         if not date_match:
@@ -46,30 +44,30 @@ def extract_transactions(text: str):
             description = description.replace(amt, "")
         description = description.strip()
 
-        # Step 1: Text based detection
-        txn_type = "unknown"
-        desc_upper = description.upper()
-        if " CR" in desc_upper or "/CR/" in desc_upper:
-            txn_type = "credit"
-        elif " DR" in desc_upper or "/DR/" in desc_upper:
-            txn_type = "debit"
-
-        # Step 2: Balance based detection (SMART PART)
-        if balance is not None and prev_balance is not None:
-            if balance > prev_balance:
-                txn_type = "credit"
-            elif balance < prev_balance:
-                txn_type = "debit"
-
-        prev_balance = balance
-
         transactions.append({
             "date": date,
             "description": description,
-            "type": txn_type,
             "amount": float(amount),
-            "balance": float(balance) if balance else None
+            "balance": float(balance) if balance else None,
+            "type": "unknown"
         })
+
+    return transactions
+
+
+def apply_balance_logic(transactions):
+    prev_balance = None
+
+    for txn in transactions:
+        curr_balance = txn["balance"]
+
+        if prev_balance is not None and curr_balance is not None:
+            if curr_balance > prev_balance:
+                txn["type"] = "credit"
+            elif curr_balance < prev_balance:
+                txn["type"] = "debit"
+
+        prev_balance = curr_balance
 
     return transactions
 
@@ -87,6 +85,7 @@ async def upload_pdf(file: UploadFile = File(...)):
             text += page.extract_text() or ""
 
     transactions = extract_transactions(text)
+    transactions = apply_balance_logic(transactions)
 
     df = pd.DataFrame(transactions)
 
@@ -97,7 +96,6 @@ async def upload_pdf(file: UploadFile = File(...)):
     df.to_csv(csv_path, index=False)
     df.to_excel(excel_path, index=False)
 
-    # SUMMARY
     total_credit = df[df["type"] == "credit"]["amount"].sum()
     total_debit = df[df["type"] == "debit"]["amount"].sum()
 
@@ -113,7 +111,6 @@ async def upload_pdf(file: UploadFile = File(...)):
             "opening_balance": opening_balance,
             "closing_balance": closing_balance
         },
-        "total_transactions": len(df),
         "download_csv": f"/download/csv/{base_name}",
         "download_excel": f"/download/excel/{base_name}"
     }
@@ -122,16 +119,14 @@ async def upload_pdf(file: UploadFile = File(...)):
 @app.get("/download/csv/{name}")
 def download_csv(name: str):
     return FileResponse(
-        path=os.path.join(EXPORT_DIR, f"{name}.csv"),
-        filename=f"{name}.csv",
-        media_type="text/csv"
+        os.path.join(EXPORT_DIR, f"{name}.csv"),
+        filename=f"{name}.csv"
     )
 
 
 @app.get("/download/excel/{name}")
 def download_excel(name: str):
     return FileResponse(
-        path=os.path.join(EXPORT_DIR, f"{name}.xlsx"),
-        filename=f"{name}.xlsx",
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        os.path.join(EXPORT_DIR, f"{name}.xlsx"),
+        filename=f"{name}.xlsx"
     )
