@@ -1,10 +1,10 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
 import os
 import shutil
 import pdfplumber
 import re
 import pandas as pd
+from fastapi.responses import FileResponse
 
 app = FastAPI()
 
@@ -28,59 +28,62 @@ def extract_transactions(text: str):
             continue
 
         amounts = amount_pattern.findall(line)
-        if not amounts:
+        if len(amounts) < 1:
             continue
 
         date = date_match.group()
 
-        amount = float(amounts[-1].replace(",", ""))
+        amount = amounts[-1].replace(",", "")
         balance = None
-
         if len(amounts) >= 2:
-            balance = float(amounts[-1].replace(",", ""))
-            amount = float(amounts[-2].replace(",", ""))
+            balance = amounts[-1].replace(",", "")
+            amount = amounts[-2].replace(",", "")
 
         description = line.replace(date, "")
-        for a in amounts:
-            description = description.replace(a, "")
+        for amt in amounts:
+            description = description.replace(amt, "")
         description = description.strip()
 
         transactions.append({
             "date": date,
             "description": description,
-            "amount": amount,
-            "balance": balance
+            "amount": float(amount),
+            "balance": float(balance) if balance else None,
+            "type": "unknown"
         })
 
     return transactions
 
 
-def calculate_summary(transactions):
-    total_credit = 0.0
-    total_debit = 0.0
+def apply_balance_logic(transactions):
+    prev_balance = None
 
-    for i in range(1, len(transactions)):
-        prev = transactions[i - 1]["balance"]
-        curr = transactions[i]["balance"]
+    for txn in transactions:
+        curr_balance = txn["balance"]
 
-        if prev is None or curr is None:
-            continue
+        if prev_balance is not None and curr_balance is not None:
+            if curr_balance > prev_balance:
+                txn["type"] = "credit"
+            elif curr_balance < prev_balance:
+                txn["type"] = "debit"
 
-        diff = curr - prev
-        if diff > 0:
-            total_credit += diff
-        else:
-            total_debit += abs(diff)
+        prev_balance = curr_balance
 
-    opening_balance = transactions[0]["balance"] if transactions else 0
-    closing_balance = transactions[-1]["balance"] if transactions else 0
+    return transactions
+
+
+def generate_summary(transactions):
+    credits = sum(t["amount"] for t in transactions if t["type"] == "credit")
+    debits = sum(t["amount"] for t in transactions if t["type"] == "debit")
+
+    balances = [t["balance"] for t in transactions if t["balance"] is not None]
 
     return {
         "total_transactions": len(transactions),
-        "total_credit": round(total_credit, 2),
-        "total_debit": round(total_debit, 2),
-        "opening_balance": opening_balance,
-        "closing_balance": closing_balance
+        "total_credit": round(credits, 2),
+        "total_debit": round(debits, 2),
+        "opening_balance": balances[0] if balances else None,
+        "closing_balance": balances[-1] if balances else None
     }
 
 
@@ -97,13 +100,15 @@ async def upload_pdf(file: UploadFile = File(...)):
             text += page.extract_text() or ""
 
     transactions = extract_transactions(text)
-    summary = calculate_summary(transactions)
+    transactions = apply_balance_logic(transactions)
+
+    summary = generate_summary(transactions)
 
     df = pd.DataFrame(transactions)
-    base = os.path.splitext(file.filename)[0]
 
-    csv_path = os.path.join(EXPORT_DIR, f"{base}.csv")
-    excel_path = os.path.join(EXPORT_DIR, f"{base}.xlsx")
+    base_name = os.path.splitext(file.filename)[0]
+    csv_path = os.path.join(EXPORT_DIR, f"{base_name}.csv")
+    excel_path = os.path.join(EXPORT_DIR, f"{base_name}.xlsx")
 
     df.to_csv(csv_path, index=False)
     df.to_excel(excel_path, index=False)
@@ -112,8 +117,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         "message": "Statement processed successfully ✅",
         "summary": summary,
         "total_transactions": len(transactions),
-        "download_csv": f"/download/csv/{base}",
-        "download_excel": f"/download/excel/{base}"
+        "download_csv": f"/download/csv/{base_name}",
+        "download_excel": f"/download/excel/{base_name}"
     }
 
 
@@ -121,7 +126,8 @@ async def upload_pdf(file: UploadFile = File(...)):
 def download_csv(name: str):
     return FileResponse(
         os.path.join(EXPORT_DIR, f"{name}.csv"),
-        filename=f"{name}.csv"
+        filename=f"{name}.csv",
+        media_type="text/csv"
     )
 
 
@@ -129,5 +135,6 @@ def download_csv(name: str):
 def download_excel(name: str):
     return FileResponse(
         os.path.join(EXPORT_DIR, f"{name}.xlsx"),
-        filename=f"{name}.xlsx"
+        filename=f"{name}.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
